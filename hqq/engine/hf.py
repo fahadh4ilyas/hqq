@@ -31,6 +31,7 @@ class HQQModelForCausalLM(_Parent, HQQWrapper):
 
     @classmethod
     def _make_quantizable(cls, model, quantized: bool) -> None:
+        model.quantization_method = 'hqq'
         model.hqq_quantized = quantized
         model.arch_key = model.config.architectures[0]
         model.quantize_model = (

@@ -477,6 +477,10 @@ class HQQLinear(nn.Module):
 
         return self
 
+    @property
+    def weight(self):
+        return self.dequantize()
+
     def to(self, *args, **kwargs):
         # TODO: later
         return self
