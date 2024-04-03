@@ -203,6 +203,9 @@ class BaseHQQModel:
         compute_dtype: torch.dtype = float16,
         device="cuda",
     ):
+        # set hqq_quantized parameter
+        model.hqq_quantized = True
+
         # Set linear tags automatically
         cls.set_auto_linear_tags(model)
 
@@ -316,6 +319,9 @@ class BaseHQQModel:
 
         # Track save directory
         model.save_dir = save_dir
+
+        # set hqq_quantized parameter
+        model.hqq_quantized = True
 
         # Name the layers
         cls.autoname_modules(model)
