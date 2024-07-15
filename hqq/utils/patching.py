@@ -6,9 +6,6 @@ from ..core.quantize import Quantizer, HQQLinear
 from ..core.utils import cleanup
 from ..core.peft import HQQLinearLoRA
 from ..models.hf.base import AutoHQQHFModel
-from ..backends.torchao import patch_hqq_to_aoint4
-from ..backends.marlin import patch_hqq_to_marlin
-from ..backends.bitblas import patch_hqq_to_bitblas
 
 
 def patch_linearlayers(model, fct, patch_param=None, verbose=False):
@@ -85,9 +82,11 @@ def prepare_for_inference(model, allow_merge=False, backend="default", verbose=F
     cleanup()
 
     if backend == "bitblas":
+        from ..backends.bitblas import patch_hqq_to_bitblas
         patch_linearlayers(model, patch_hqq_to_bitblas, verbose=verbose)
         cleanup()
     if backend == "torchao_int4":
+        from ..backends.torchao import patch_hqq_to_aoint4
         patch_linearlayers(model, patch_hqq_to_aoint4, verbose=verbose)
         cleanup()
     if allow_merge:  # only compatible with symmetric quant kernels
@@ -97,6 +96,7 @@ def prepare_for_inference(model, allow_merge=False, backend="default", verbose=F
         )
         cleanup()
     if backend == "marlin":
+        from ..backends.marlin import patch_hqq_to_marlin
         patch_linearlayers(model, patch_hqq_to_marlin, verbose=verbose)
         cleanup()
 
