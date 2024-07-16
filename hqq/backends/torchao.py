@@ -20,7 +20,7 @@ from ..core.peft import HQQLinearLoRA
 from ..core.utils import cleanup
 
 
-class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
+class HQQLinearTorchWeightOnlynt4(HQQLinear):
     def __init__(
         self,
         linear_layer: Union[nn.Module, None],
@@ -32,7 +32,7 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
         inner_k_tiles=8,
         padding=True,
     ):
-        super().__init__()
+        nn.Module.__init__(self)
 
         self.ready = False
         self.in_gpu = False
@@ -54,26 +54,27 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
                 "Invalid parameters: setting initialize to True requires a quant_config."
             )
 
+        self.meta = {}
         if self.quant_config is not None:
             weight_quant_params = self.quant_config["weight_quant_params"]
-            self.groupsize = weight_quant_params["group_size"]
-            self.nbits = weight_quant_params["nbits"]
-            self.axis = weight_quant_params["axis"]
+            self.meta["groupsize"] = weight_quant_params["group_size"]
+            self.meta["nbits"] = weight_quant_params["nbits"]
+            self.meta["axis"] = weight_quant_params["axis"]
 
         if linear_layer is not None:
-            self.groupsize = linear_layer.meta["group_size"]
-            self.nbits = linear_layer.meta["nbits"]
-            self.axis = linear_layer.meta["axis"]
+            self.meta["groupsize"] = linear_layer.meta["group_size"]
+            self.meta["nbits"] = linear_layer.meta["nbits"]
+            self.meta["axis"] = linear_layer.meta["axis"]
 
         self.inner_k_tiles = inner_k_tiles
         self.padding = padding
 
-        assert self.axis == 1, "Only axis==1 is supported"
-        assert self.nbits in [4], "Unsupported nbits."
+        assert self.meta["axis"] == 1, "Only axis==1 is supported"
+        assert self.meta["nbits"] in [4], "Unsupported nbits."
         assert (
             self.compute_dtype is bfloat16
         ), "Only bfloat16 compute_dtype is supported."
-        assert self.groupsize in [None, 32, 64, 128, 256], "Unsupported groupsize."
+        assert self.meta["groupsize"] in [None, 32, 64, 128, 256], "Unsupported groupsize."
         assert self.inner_k_tiles in [2, 4, 8], "Unsupported tile."
 
         self.linear_layer = linear_layer
@@ -124,6 +125,14 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
         torch.cuda.empty_cache()
 
         return self
+    
+    def extra_repr(self) -> str:
+        out = ""
+        if hasattr(self, "meta"):
+            if self.meta is not None:
+                in_features, out_features = self.meta["shape"][::-1]
+                out = f"in_features={in_features}, out_features={out_features}, bias={self.bias is not None}"
+        return out
 
     ###################### Quantize/packing ######################
 
@@ -162,7 +171,7 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
         return n + k - (n % k)
 
     def set_shape(self, shape):
-        self.shape = shape
+        self.meta["shape"] = shape
         self.in_features = shape[1]
         self.out_features = shape[0]
 
@@ -181,19 +190,19 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
         if meta["packing"] is not None:
             W_q = Quantizer.unpack[meta["packing"]](W_q)
 
-        if self.groupsize is None:
-            self.groupsize = 128
-            W_q = W_q.reshape([-1, self.groupsize])
-            scales = self.reshape_meta_axis1(scales, self.groupsize, shape)
-            zeros = self.reshape_meta_axis1(zeros, self.groupsize, shape)
+        if self.meta.get("groupsize", None) is None:
+            self.meta["groupsize"] = 128
+            W_q = W_q.reshape([-1, self.meta["groupsize"]])
+            scales = self.reshape_meta_axis1(scales, self.meta["groupsize"], shape)
+            zeros = self.reshape_meta_axis1(zeros, self.meta["groupsize"], shape)
 
         W_q_torch, scales_torch, zeros_torch = self.hqq_quants_to_torch_quants(
-            W_q=W_q, scales=scales, zeros=zeros, shape=shape, nbits=self.nbits
+            W_q=W_q, scales=scales, zeros=zeros, shape=shape, nbits=self.meta["nbits"]
         )
-        self.weight_int4pack = torch.ops.aten._convert_weight_to_int4pack(
+        self.W_q = torch.ops.aten._convert_weight_to_int4pack(
             W_q_torch, self.inner_k_tiles
         )
-        self.scales_and_zeros = self.pack_scales_and_zeros(scales_torch, zeros_torch)
+        self.meta["scales_and_zeros"] = self.pack_scales_and_zeros(scales_torch, zeros_torch)
 
         del W_q_torch, scales_torch, zeros_torch
         torch.cuda.empty_cache()
@@ -259,7 +268,7 @@ class HQQLinearTorchWeightOnlynt4(torch.nn.Module):
         origin_x_size = x.size()
         x = x.reshape(-1, origin_x_size[-1])
         c = torch.ops.aten._weight_int4pack_mm(
-            x, self.weight_int4pack, self.groupsize, self.scales_and_zeros
+            x, self.W_q, self.meta["groupsize"], self.meta["scales_and_zeros"]
         )
         new_shape = origin_x_size[:-1] + (self.out_features,)
         c = c.reshape(new_shape)
